@@ -1,8 +1,9 @@
 ---
-title: "Data Exploration and Analysis of the Tether Blockchain"
+title: "Data Exploration and Visualization of the Tether Blockchain"
 author: "Keith Erskine"
-date: "2/15/2018"
+date: "`r format(Sys.Date())`"
 output: html_document
+
 ---
 
 ```{r setup, include=FALSE}
@@ -12,41 +13,211 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Summary
 
-This is the last part to write
+The use of the cryptocurrency, Tether, is widespread in Bitcoin exchanges. While most of the transaction flow is centered around one exchange, Bitfinex, other exchanges are trading Tether between themselves. 
+
+This is a visualization of the transaction flow of Tether between identified exchanges. 
 
 ## Background
 
+Tether is a "stablecoin" used in trading Bitcoin on exchanges around the word. A stablecoin is digital currency that is pegged to a particular country's currency (fiat). The advantage in using a stablecoin is that trading accounts can be closed and held in value at a lower fee. Without a stablecoin, a trader wishing to close their account for the day would incur higher fees converting Bitcoin to fiat, and then re-incurring fees the next day moving fiat into Bitcoin. 
 
+In the case of Tether, the number of tokens are tied to US Dollars (USD) held in reserve; one token for one US Dollar. In 2017, Tether issued over two billion tokens that were used in the run up of Bitcoin's valuation. The use of Tether has come under scrutiny as the company hasn't provided substantial proof that they hold USD in reserve needed to back those tokens. At the time of this writing, Tether comprises a third of Bitcoin's transaction volume. The risk of Tether not being backed by sufficient reserves could have a extreme impact on Bitcoin's perceived value. 
 
 ## Data Exploration
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+The data file for this analysis was created by [Alex Vikati](https://hackernoon.com/a-closer-look-at-tethers-blockchain-5c3032328e52) using an Omnicore node which tracks Tether transactions on the Bitcoin Blockchain. It's a 68 MB compresses csv (comma separated value) file of over 890,000 records with 12 variables (see Appendix for explanation of fields). All data is current to Bitcoin Block# 507015 (2018-01-31, 23:46 UTC)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r Setup, , cache=TRUE, echo=FALSE, message=FALSE}
+```{r Libraries, echo=FALSE, message=FALSE}
 library(tidyverse)
 library(lubridate)
+library(stringr)
 library(igraph)
+```
+
+File is downloaded and a tibble is created from the csv file. 
+
+```{r Download, cache=TRUE, echo=TRUE, message=FALSE, warning=FALSE}
+rawcsv <- "https://s3-us-west-2.amazonaws.com/data.blockspur.com/tether/tether_transactions_507015.csv.zip"
+
+download.file(rawcsv, "raw.csv.zip", method = "curl")
+
+rawdata <- read_csv("raw.csv.zip")
+```
+
+We only need to look at valid transactions, so invalid ones are removed:
+
+```{r Clean, cache=TRUE, echo=TRUE}
+
+valid.tether <- rawdata %>% filter(is_valid == 1)
 
 ```
 
 ## Transaction Flow
 
+In order to understand the extent in which Tether is used in Bitcoin trading, we need to see where it's being traded. Is it just in one exchange or multiple exchanges? Also, are Tether transaction centralized with one exchange or do exchanges trade with each other?
 
+First we'll need to summarize the dataset for all unique transactions:
 
-```{r }
+```{r toptrans, cache=TRUE, echo=TRUE}
+options(width = 85)
+toptrans <- valid.tether %>%
+        select(sending_address, reference_address, amount) %>% 
+        group_by(sending_address, reference_address) %>%
+        summarise(total = sum(amount)) %>%
+        arrange(desc(total)) %>%
+        ungroup(.)
+
+toptrans
+```
+
+We can see the first seven records have transactions of over a billion Tether between them, but who belongs to these addresses? After a good deal of investigation, a list of addresses and their associated exchanges was constructed (see Appendix > Address Identification):
+
+```{r addresses, cache=TRUE, echo=TRUE, message=FALSE}
+addresses <- read_csv("address.csv")
+addresses
+```
+
+Matching up addresses with their owners allows us to produce a network graph showing the transaction flow: 
+
+```{r From-to, cache=TRUE, echo=TRUE}
+# Let's only look at the top 100 transaction pairs
+g<- toptrans[1:100, ] %>% 
+        left_join(addresses, by = c("sending_address" = "address")) %>%
+        left_join(addresses, by = c("reference_address" = "address")) %>%
+        
+        # Display the names if there's a match, otherwise just display the 1st 5 characters
+        # of the unknown address
+        mutate(send.addr = if_else(is.na(exchange.x), 
+                                   str_c(strtrim(sending_address, 5), "..."),
+                                   exchange.x)) %>%
+        mutate(recv.addr = if_else(is.na(exchange.y), 
+                                   str_c(strtrim(reference_address, 5), "..."),
+                                   exchange.y)) %>%
+        select(send.addr, recv.addr) %>%
+        
+        # Use igraph to create the network diagram
+        graph_from_data_frame(.)
+```
+```{r Plot, cache=TRUE, echo=TRUE, fig.height = 8, fig.width = 10}
+# Now plot it
+
+plot(g, 
+     vertex.size = 10,
+     vertex.shape = "none",
+     asp = 0, 
+     edge.arrow.size = 0.25, 
+     vertex.label.cex = 0.8,
+     vertex.label.family = "sans"
+     )        
+     title("Tether Flow - Top 100 Transactions")
 
 ```
 
 
+        
+```
 
-## What is Tether?
+##Analysis
+
+**Bitfinex is the dominate center of Tether trading:** All Tether is sent to the Bitfinex-01 address (1KYiK...) which then distributes it to other exchanges and its own exchange customers. This isn't surprising as Tether and Bitfinex share management. 
+
+**Tether is traded between exchanges:** Huobi, Poloniex, Bittrex and Binance are all trading Tether with each other without Bitfinex being involved. Kraken, Gate.io  and OKEx just trade with Bitfinex. 
+
+##Next Steps
+
+* **Investigate unknown addresses Sierra-02 and Phantom-01:** More work is needed to find out how these two addresses
+* **Determine how Tether trades are settled between exchanges:** This might be beyond the scope of the present dataset as the Bitcoin transactions which contain Tether transactions are typically for small amounts. 
 
 
-#Acknowledgements
+##Acknowledgements
 
-First, I'd like to thank [Alex Vikati](https://hackernoon.com/a-closer-look-at-tethers-blockchain-5c3032328e52) for doing the hard work in constructing the Tether dataset used in this analysis. 
+First, I'd like to thank Alex Vikati for doing the hard work in constructing the Tether dataset used in this analysis. 
 
 I'd also like to thank Roger Peng, Brian Caffo, Jeff Leek, Johns Hopkins, and Coursera for giving me the working knowledge to attempt this project. 
 
+## Appendix
+
+### Address Identification
+
+Figuring out which address belongs to which exchange is currently an itterative process. To accomplish it, two functions; t.send and t.recv were developed to examine the transaction flows of a specific address:
+
+```{r Tools, cache=TRUE, echo=FALSE}
+
+t.recv <- function(addr, blockdata, pareto = 0.8) {
+        
+        blockdata %>% 
+                # Get all the Tethers rec'v to addr
+                filter(reference_address == addr) %>%
+                # Group all sending addresses, sum, then arrange in descending order
+                group_by(reference_address, sending_address) %>% 
+                summarise(total.recv = sum(amount)) %>% 
+                arrange(desc(total.recv)) %>%
+                ungroup(.) %>%
+                # Pareto - get cummulative frequency
+                mutate(cum.freq = cumsum(total.recv) / sum(total.recv)) %>%
+                # Filter again for only the top results that get to 80% (if default used)
+                filter(cum.freq <= pareto)
+                
+}
+
+
+
+t.send <- function(addr, blockdata, pareto = 0.8) {
+        
+        blockdata %>% 
+                # Get all Tethers sent to addr
+                filter(sending_address == addr) %>%
+                # Group all sending addresses, sum, then arrange in descending order
+                group_by(sending_address, reference_address) %>% 
+                summarise(total.sent = sum(amount)) %>% 
+                arrange(desc(total.sent)) %>%
+                ungroup(.) %>%
+                # Pareto - get cummulative frequency
+                mutate(cum.freq = cumsum(total.sent) / sum(total.sent)) %>%
+                # Filter again for only the top results that get to 80% (if default used)
+                filter(cum.freq <= pareto)
+                }
+```
+
+As an example, let's look at address 19Qcmdh2FEZnTEFeEbQvWPSvfLuRBcjyo4 to see total Tether received and sent:
+
+```{r Example t.recv, cache=TRUE, echo=TRUE}
+
+t.recv("19Qcmdh2FEZnTEFeEbQvWPSvfLuRBcjyo4", valid.tether, 1)
+
+```
+
+This address received Tether from at least three different exchanges: Gate.io (1DcKs...), Huobi (1LAn...), and OKex (1Apk...). Each are identified on the [Tether Rich List (archived on April 6, 2018)](http://archive.is/i9oId) as belonging to these exchanges. Now to look at where the Tether was sent:
+
+```{r Example t.send, cache=TRUE, echo=TRUE}
+
+t.send("19Qcmdh2FEZnTEFeEbQvWPSvfLuRBcjyo4", valid.tether, 1)
+
+```
+
+Here we see only on address that Tether is sent to; 1KYiK... which the "Rich List" identifies as belonging to Bitfinex. 
+
+Therefore, it's a safe assumption that the address belongs to Bitfinex and was used in the course of their business transacting Tether with other exchanges. You'll find it named "Bitfinex-07" in the addresses tibble.
+
+### Blockspur CSV Data Fields
+
+From [Blockspur : Download Tether Data](https://blockspur.com/tether/download)
+
+tether_transactions_507015.csv.zip is a 68MB compressed / 240MB uncompressed CSV file that contains every Tether transaction on the Omni blockchain up until block 507015.
+
+The fields are listed below:
+
+Name | Description | Type
+---- | ----------------------------------------------------- | ----
+tx_hash | The unique id of the transaction; same as the BTC txid | string
+block_height | The numeric height of the block in the BTC blockchain | integer
+block_hash | The unique id of the BTC block the transaction is in | string
+block_time | The timestamp of the BTC block the transaction is in | datetime, GMT 0
+position_in_block | The numeric position of the transaction within the block | integer
+sending_address | The BTC address of the sender | string
+reference_address | A BTC address used as reference.  Same as the recipient address in the case of "Simple Send" | string
+tx_type | The transaction type, with "Simple Send" being the most popular.  Valid values are listed on Omni Layer's spec | string 
+amount | The amount of token in the transaction | float
+version | The transaction version number | integer
+is_valid | 1 if the transaction is valid; 0 if it is not; | integer
+fee | The transaction fee in BTC | float
