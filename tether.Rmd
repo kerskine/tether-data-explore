@@ -1,7 +1,7 @@
 ---
 title: "Data Exploration and Visualization of the Tether Blockchain"
 author: "Keith Erskine"
-date: "`r format(Sys.Date())`"
+date: "`June 4, 2018`"
 output: html_document
 
 ---
@@ -17,6 +17,10 @@ The use of the cryptocurrency, Tether, is widespread in Bitcoin exchanges. While
 
 This is a visualization of the transaction flow of Tether between identified exchanges. 
 
+## Version Control
+
+The most up to date version of this analysis can always be found on the GitHub repository: [https://github.com/kerskine/tether-data-explore](https://github.com/kerskine/tether-data-explore)
+
 ## Background
 
 Tether is a "stablecoin" used in trading Bitcoin on exchanges around the word. A stablecoin is digital currency that is pegged to a particular country's currency (fiat). The advantage in using a stablecoin is that trading accounts can be closed and held in value at a lower fee. Without a stablecoin, a trader wishing to close their account for the day would incur higher fees converting Bitcoin to fiat, and then re-incurring fees the next day moving fiat into Bitcoin. 
@@ -25,9 +29,9 @@ In the case of Tether, the number of tokens are tied to US Dollars (USD) held in
 
 ## Data Exploration
 
-The data file for this analysis was created by [Alex Vikati](https://hackernoon.com/a-closer-look-at-tethers-blockchain-5c3032328e52) using an Omnicore node which tracks Tether transactions on the Bitcoin Blockchain. It's a 68 MB compresses csv (comma separated value) file of over 890,000 records with 12 variables (see Appendix for explanation of fields). All data is current to Bitcoin Block# 507015 (2018-01-31, 23:46 UTC)
+The data file for this analysis was created by [Alex Vikati](https://hackernoon.com/a-closer-look-at-tethers-blockchain-5c3032328e52) using an Omnicore node which tracks Tether transactions on the Bitcoin Blockchain. It's a 68 MB compresses csv (comma separated value) file of over 1,508,702 records with 12 variables (see Appendix for explanation of fields). All data is current to Bitcoin Block# 522647 (2018-05-14 15:48:10 UTC)
 
-```{r Libraries, echo=FALSE, message=FALSE}
+```{r Libraries, cache=TRUE, echo=FALSE, message=FALSE}
 library(tidyverse)
 library(lubridate)
 library(stringr)
@@ -37,11 +41,12 @@ library(igraph)
 File is downloaded and a tibble is created from the csv file. 
 
 ```{r Download, cache=TRUE, echo=TRUE, message=FALSE, warning=FALSE}
-rawcsv <- "https://s3-us-west-2.amazonaws.com/data.blockspur.com/tether/tether_transactions_507015.csv.zip"
+rawcsv <- "https://s3-us-west-2.amazonaws.com/data.blockspur.com/tether/tether_transactions_522647.csv.zip"
 
 download.file(rawcsv, "raw.csv.zip", method = "curl")
 
 rawdata <- read_csv("raw.csv.zip")
+
 ```
 
 We only need to look at valid transactions, so invalid ones are removed:
@@ -70,7 +75,7 @@ toptrans <- valid.tether %>%
 toptrans
 ```
 
-We can see the first seven records have transactions of over a billion Tether between them, but who belongs to these addresses? After a good deal of investigation, a list of addresses and their associated exchanges was constructed (see Appendix > Address Identification):
+We can see the first ten records have transactions of over a billion Tether between them, but who belongs to these addresses? After a good deal of investigation, a list of addresses and their associated exchanges was constructed (see Appendix > Address Identification):
 
 ```{r addresses, cache=TRUE, echo=TRUE, message=FALSE}
 addresses <- read_csv("address.csv")
@@ -80,28 +85,35 @@ addresses
 Matching up addresses with their owners allows us to produce a network graph showing the transaction flow: 
 
 ```{r From-to, cache=TRUE, echo=TRUE}
-# Let's only look at the top 100 transaction pairs
-g<- toptrans[1:100, ] %>% 
+
+# Let's only look at the top 100 transaction pairs and join it with the addresses
+
+g <- toptrans[1:100, ] %>% 
         left_join(addresses, by = c("sending_address" = "address")) %>%
-        left_join(addresses, by = c("reference_address" = "address")) %>%
+        left_join(addresses, by = c("reference_address" = "address")) 
         
-        # Display the names if there's a match, otherwise just display the 1st 5 characters
+        # Display the id names if there's a match, otherwise just display the 1st 5 characters
         # of the unknown address
-        mutate(send.addr = if_else(is.na(exchange.x), 
+
+g.id <- g %>%
+        
+        mutate(send.addr = if_else(is.na(id.x), 
                                    str_c(strtrim(sending_address, 5), "..."),
-                                   exchange.x)) %>%
-        mutate(recv.addr = if_else(is.na(exchange.y), 
+                                   id.x)) %>%
+        mutate(recv.addr = if_else(is.na(id.y), 
                                    str_c(strtrim(reference_address, 5), "..."),
-                                   exchange.y)) %>%
+                                   id.y)) %>%
         select(send.addr, recv.addr) %>%
         
         # Use igraph to create the network diagram
         graph_from_data_frame(.)
 ```
+
 ```{r Plot, cache=TRUE, echo=TRUE, fig.height = 8, fig.width = 10}
+
 # Now plot it
 
-plot(g, 
+plot(g.id, 
      vertex.size = 10,
      vertex.shape = "none",
      asp = 0, 
@@ -109,13 +121,46 @@ plot(g,
      vertex.label.cex = 0.8,
      vertex.label.family = "sans"
      )        
-     title("Tether Flow - Top 100 Transactions")
+     title("Tether Flow - Top 100 Transactions - Exchange Addresses")
 
 ```
 
+The above network map is busy as it shows all the different addresses ("id" variable in address) used for transferring Tether between exchanges. If we just show the exchanges themselves we can get a clearer picture.
+
+```{r Plot2, cache=TRUE, echo=TRUE, fig.height = 8, fig.width = 10}
+
+g.ex <- g %>%
+        
+        mutate(send.addr = if_else(is.na(exchange.x), 
+                                   str_c(strtrim(sending_address, 5), "..."),
+                                   exchange.x)) %>%
+        mutate(recv.addr = if_else(is.na(exchange.y), 
+                                   str_c(strtrim(reference_address, 5), "..."),
+                                   exchange.y)) %>%
+        select(send.addr, recv.addr) %>%
+        # Get only distinct connections
+        distinct(.) %>%
+        
+        # Remove connections that are inside exchange
+        filter(send.addr != recv.addr) %>%
+
+        # Use igraph to create the network diagram
+        graph_from_data_frame(.)
+
+plot(g.ex, 
+     vertex.size = 10,
+     vertex.shape = "none",
+     asp = 0, 
+     edge.arrow.size = 0.25, 
+     vertex.label.cex = 0.8,
+     vertex.label.family = "sans"
+)        
+title("Tether Flow - Top 100 Transactions - Exchanges")
+
+```
 
         
-```
+
 
 ##Analysis
 
@@ -125,7 +170,7 @@ plot(g,
 
 ##Next Steps
 
-* **Investigate unknown addresses Sierra-02 and Phantom-01:** More work is needed to find out how these two addresses
+* **Investigate unknown addresses:** More work is needed to detrmine the owners of unknown addresses (examples Sierra-06, 1JP22..). The challenge is that exchanges are using multiple addresses for transactions as part of business processes or to increase privacy. 
 * **Determine how Tether trades are settled between exchanges:** This might be beyond the scope of the present dataset as the Bitcoin transactions which contain Tether transactions are typically for small amounts. 
 
 
